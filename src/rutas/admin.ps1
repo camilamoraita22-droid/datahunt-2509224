@@ -16,7 +16,6 @@ function Formulario-Admin([string]$mensaje = "") {
 $Rutas["/admin"] = {
     param($ctx)
 
-    # H-02 corregido: exige clave de administración por POST o cabecera válida
     $autorizado = $false
 
     if ($ctx.Request.HttpMethod -eq "POST") {
@@ -41,11 +40,12 @@ $Rutas["/admin"] = {
 
     Registrar-Acceso $ctx "admin" "admin_panel" $true
 
-    $usuarios = @(Leer-Csv $ArchivoUsuarios)
-    $accesos  = @(Leer-Csv $ArchivoAccesos)
+    $usuariosSinHash = @(Leer-Csv $ArchivoUsuarios) | Select-Object * -ExcludeProperty password
+    $accesos         = @(Leer-Csv $ArchivoAccesos)
     [array]::Reverse($accesos)
 
-    $contenido  = "<h2>Clientes ($($usuarios.Count))</h2>" + (Tabla-Html $usuarios)
+    $contenido  = "<p><a href='/arco'>Ir al portal de derechos ARCO</a></p>"
+    $contenido += "<h2>Clientes ($($usuariosSinHash.Count))</h2>" + (Tabla-Html $usuariosSinHash)
     $contenido += "<h2>Bitácora de accesos</h2>" + (Tabla-Html $accesos)
     Enviar $ctx (Nueva-Pagina "Administración" $contenido)
 }
