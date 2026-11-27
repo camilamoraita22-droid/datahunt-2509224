@@ -1,6 +1,6 @@
 # =====================================================================
 # src\rutas\login.ps1 - Inicio de sesión y bitácora de accesos
-# VERSIÓN LÍNEA BASE: contiene fallas intencionales marcadas como HALLAZGO
+# Corrección H-01 (verificación PBKDF2) y H-03 (sin debug en consola)
 # =====================================================================
 
 function Formulario-Login([string]$mensaje = "") {
@@ -13,7 +13,34 @@ function Formulario-Login([string]$mensaje = "") {
     return $html
 }
 
-# Guarda un evento en la bitácora de accesos (access_log.csv)
+function Verificar-Password([string]$password, [string]$almacenado) {
+    if (-not $password -or -not $almacenado) { return $false }
+
+    $partes = $almacenado -split '\$'
+    if ($partes.Count -ne 4 -or $partes[0] -ne "pbkdf2_sha256") {
+        return $false
+    }
+
+    $iteraciones = [int]$partes[1]
+    $saltBytes   = [Convert]::FromBase64String($partes[2])
+    $hashEsperado = [Convert]::FromBase64String($partes[3])
+
+    $pbkdf2 = [System.Security.Cryptography.Rfc2898DeriveBytes]::new(
+        $password,
+        $saltBytes,
+        $iteraciones,
+        [System.Security.Cryptography.HashAlgorithmName]::SHA256
+    )
+    try {
+        $hashCalculado = $pbkdf2.GetBytes($hashEsperado.Length)
+    }
+    finally {
+        $pbkdf2.Dispose()
+    }
+
+    return [System.Security.Cryptography.CryptographicOperations]::FixedTimeEquals($hashCalculado, $hashEsperado)
+}
+
 function Registrar-Acceso($ctx, [string]$email, [string]$evento, [bool]$exito) {
     Agregar-Csv $ArchivoAccesos ([ordered]@{
         fecha     = Ahora
@@ -35,13 +62,12 @@ $Rutas["/login"] = {
 
     $form = Leer-Formulario $ctx
 
-    # HALLAZGO H-03: la contraseña aparece en la consola del servidor
-    Write-Host "[DEBUG] Inicio de sesión: email=$($form['email']) password=$($form['password'])" -ForegroundColor Yellow
+    # H-03 corregido: no se imprime la contraseña en la consola
 
-    # HALLAZGO H-01: compara contraseñas guardadas en texto plano
-    $usuario = Leer-Csv $ArchivoUsuarios | Where-Object { $_.email -eq $form["email"] -and $_.password -eq $form["password"] }
+    $usuario = Leer-Csv $ArchivoUsuarios | Where-Object {
+        $_.email -eq $form["email"] -and (Verificar-Password $form["password"] $_.password)
+    }
 
-    # Cada intento queda en la bitácora, exitoso o no
     Registrar-Acceso $ctx $form["email"] "login" ([bool]$usuario)
 
     if ($usuario) {

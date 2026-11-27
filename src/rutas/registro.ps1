@@ -1,7 +1,29 @@
 # =====================================================================
 # src\rutas\registro.ps1 - Alta de clientes
-# VERSIÓN LÍNEA BASE: contiene fallas intencionales marcadas como HALLAZGO
+# Corrección H-01 (hash PBKDF2 con salt) y H-03 (sin debug en consola)
 # =====================================================================
+
+function Hashear-Password([string]$password) {
+    $saltBytes = New-Object byte[] 16
+    [System.Security.Cryptography.RandomNumberGenerator]::Fill($saltBytes)
+
+    $pbkdf2 = [System.Security.Cryptography.Rfc2898DeriveBytes]::new(
+        $password,
+        $saltBytes,
+        100000,
+        [System.Security.Cryptography.HashAlgorithmName]::SHA256
+    )
+    try {
+        $hashBytes = $pbkdf2.GetBytes(32)
+    }
+    finally {
+        $pbkdf2.Dispose()
+    }
+
+    $saltB64 = [Convert]::ToBase64String($saltBytes)
+    $hashB64 = [Convert]::ToBase64String($hashBytes)
+    return "pbkdf2_sha256`$100000`$$saltB64`$$hashB64"
+}
 
 function Formulario-Registro([string]$mensaje = "") {
     $html = ""
@@ -22,18 +44,14 @@ $Rutas["/registro"] = {
     param($ctx)
     $peticion = $ctx.Request
 
-    # GET: muestra el formulario vacío
     if ($peticion.HttpMethod -ne "POST") {
         Enviar $ctx (Nueva-Pagina "Crear cuenta" (Formulario-Registro))
         return
     }
 
-    # POST: procesa los datos enviados
     $form = Leer-Formulario $ctx
 
-    # HALLAZGO H-03: los datos del cliente se imprimen en la consola del servidor
-    $texto = ($form.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }) -join " | "
-    Write-Host "[DEBUG] Registro recibido: $texto" -ForegroundColor Yellow
+    # H-03 corregido: no se imprimen datos personales ni contraseñas en la consola
 
     if (-not $form["email"] -or -not $form["password"]) {
         Enviar $ctx (Nueva-Pagina "Crear cuenta" (Formulario-Registro "El correo y la contraseña son obligatorios."))
@@ -46,16 +64,16 @@ $Rutas["/registro"] = {
 
     $registro = [ordered]@{}
     $registro["email"] = $form["email"]
-    # HALLAZGO H-01: la contraseña se guarda en texto plano
-    $registro["password"] = $form["password"]
+    # H-01 corregido: se almacena el hash PBKDF2-HMAC-SHA-256 con salt aleatoria
+    $registro["password"] = Hashear-Password $form["password"]
     foreach ($campo in $Campos) {
         $registro[$campo.Nombre] = $form[$campo.Nombre]
     }
 
     # HALLAZGO H-05: datos que el cliente nunca escribió y que ningún aviso declara
-    $registro["ip"]        = $peticion.RemoteEndPoint.Address.ToString()
-    $registro["navegador"] = $peticion.UserAgent
-    $registro["idioma"]    = $peticion.Headers["Accept-Language"]
+    $registro["ip"]             = $peticion.RemoteEndPoint.Address.ToString()
+    $registro["navegador"]      = $peticion.UserAgent
+    $registro["idioma"]         = $peticion.Headers["Accept-Language"]
     $registro["fecha_registro"] = Ahora
 
     # HALLAZGO H-06: el archivo users.csv se guarda sin cifrar
