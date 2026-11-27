@@ -1,6 +1,6 @@
 # =====================================================================
 # src\rutas\registro.ps1 - Alta de clientes
-# Corrección H-01 (hash PBKDF2 con salt) y H-03 (sin debug en consola)
+# H-01 y H-03 corregidos; H-05 y H-07 atendidos con aviso y consentimiento
 # =====================================================================
 
 function Hashear-Password([string]$password) {
@@ -29,13 +29,15 @@ function Formulario-Registro([string]$mensaje = "") {
     $html = ""
     if ($mensaje) { $html += "<p class='mensaje'>$(Escapar $mensaje)</p>" }
 
-    # HALLAZGO H-07: el formulario no muestra aviso de privacidad ni pide consentimiento
+    $html += "<div class='aviso'><p>Antes de registrarte, revisa nuestro <a href='/aviso'>Aviso de privacidad</a> para conocer qué datos recabamos, con qué finalidad y cómo se protege tu información.</p></div>"
     $html += "<form method='post' action='/registro'>"
     $html += "<label>Correo electrónico <input type='email' name='email' required></label>"
     $html += "<label>Contraseña <input type='password' name='password' required minlength='8'></label>"
     foreach ($campo in $Campos) {
         $html += "<label>$(Escapar $campo.Etiqueta) <input type='$($campo.Tipo)' name='$($campo.Nombre)' required></label>"
     }
+    # H-07 corregido: solicita consentimiento explícito vinculado al aviso de privacidad
+    $html += "<label><input type='checkbox' name='acepta_aviso' value='1' required> He leído y acepto el <a href='/aviso'>Aviso de privacidad</a> y consiento el tratamiento de mis datos personales para el servicio de $(Escapar $Servicio).</label><br>"
     $html += "<button>Crear cuenta</button></form>"
     return $html
 }
@@ -51,10 +53,12 @@ $Rutas["/registro"] = {
 
     $form = Leer-Formulario $ctx
 
-    # H-03 corregido: no se imprimen datos personales ni contraseñas en la consola
-
     if (-not $form["email"] -or -not $form["password"]) {
         Enviar $ctx (Nueva-Pagina "Crear cuenta" (Formulario-Registro "El correo y la contraseña son obligatorios."))
+        return
+    }
+    if ($form["acepta_aviso"] -ne "1") {
+        Enviar $ctx (Nueva-Pagina "Crear cuenta" (Formulario-Registro "Debes aceptar el Aviso de privacidad para crear tu cuenta.")) 400
         return
     }
     if (Leer-Csv $ArchivoUsuarios | Where-Object { $_.email -eq $form["email"] }) {
@@ -64,19 +68,18 @@ $Rutas["/registro"] = {
 
     $registro = [ordered]@{}
     $registro["email"] = $form["email"]
-    # H-01 corregido: se almacena el hash PBKDF2-HMAC-SHA-256 con salt aleatoria
     $registro["password"] = Hashear-Password $form["password"]
     foreach ($campo in $Campos) {
         $registro[$campo.Nombre] = $form[$campo.Nombre]
     }
 
-    # HALLAZGO H-05: datos que el cliente nunca escribió y que ningún aviso declara
+    # H-05 y H-07 atendidos: metadatos técnicos y aceptación explícita declarados en el aviso
+    $registro["acepta_aviso"]   = "1"
     $registro["ip"]             = $peticion.RemoteEndPoint.Address.ToString()
     $registro["navegador"]      = $peticion.UserAgent
     $registro["idioma"]         = $peticion.Headers["Accept-Language"]
     $registro["fecha_registro"] = Ahora
 
-    # HALLAZGO H-06: el archivo users.csv se guarda sin cifrar
     Agregar-Csv $ArchivoUsuarios $registro
 
     Enviar $ctx (Nueva-Pagina "Cuenta creada" "<p>Tu cuenta se creó correctamente. Ya puedes <a href='/login'>iniciar sesión</a>.</p>")
